@@ -1,10 +1,10 @@
 <?php
 
 //load classes init method
-add_action('init', array('RazorPay_PMProGateway', 'init'));
-add_filter('pmpro_is_ready', array( 'RazorPay_PMProGateway', 'pmpro_is_razorpay_ready' ), 999, 1 );
+add_action('init', array('PMProGateway_Razorpay', 'init'));
+add_filter('pmpro_is_ready', array( 'PMProGateway_Razorpay', 'pmpro_is_razorpay_ready' ), 999, 1 );
 
-class RazorPay_PMProGateway extends PMProGateway {
+class PMProGateway_Razorpay extends PMProGateway {
 
 	function __construct( $gateway = NULL ) {
 
@@ -18,67 +18,64 @@ class RazorPay_PMProGateway extends PMProGateway {
 	 * @since 1.8
 	 */
 	static function init() {
+		//make sure Razorpay is a gateway option
+		add_filter('pmpro_gateways', array('PMProGateway_Razorpay', 'pmpro_gateways')); //
 
-		//make sure RazorPay is a gateway option
-		add_filter( 'pmpro_gateways', array( 'RazorPay_PMProGateway', 'pmpro_gateways' ));
-		add_filter( 'pmpro_gateways_with_pending_status', array( 'RazorPay_PMProGateway', 'pmpro_gateways_with_pending_status' ) );
+        //add fields to payment settings
+		add_filter('pmpro_payment_options', array('PMProGateway_Razorpay', 'pmpro_payment_options')); //
+		add_filter('pmpro_payment_option_fields', array('PMProGateway_Razorpay', 'pmpro_payment_option_fields'), 10, 2); //
+		add_action('wp_ajax_pmpro_razorpay_ipn', array('PMProGateway_Razorpay', 'pmpro_razorpay_ipn')); //
+		add_action('wp_ajax_nopriv_pmpro_razorpay_ipn', array('PMProGateway_Razorpay', 'pmpro_razorpay_ipn')); //
 
-		//add fields to payment settings
-		add_filter( 'pmpro_payment_options', array( 'RazorPay_PMProGateway', 'pmpro_payment_options' ));
-		add_filter( 'pmpro_payment_option_fields', array( 'RazorPay_PMProGateway', 'pmpro_payment_option_fields' ), 10, 2);
-		//code to add at checkout
+        //code to add at checkout
 		$gateway = pmpro_getGateway();
+		if ($gateway == "razorpay") {
+			// Add support for custom fields.
+			add_action( 'pmpro_before_send_to_razorpay', 'pmpro_after_checkout_save_fields', 20, 2 ); ///
 
-		if ( $gateway == "razorpay" ) {
+			//add_filter('pmpro_include_billing_address_fields', '__return_false');
+			add_filter('pmpro_required_billing_fields', array('PMProGateway_Razorpay', 'pmpro_required_billing_fields'));
+			add_filter('pmpro_include_payment_information_fields', '__return_false', 20 );
+			add_filter('pmpro_checkout_before_change_membership_level', array('PMProGateway_Razorpay', 'pmpro_checkout_before_change_membership_level'), 10, 2); //
 
-			add_filter( 'pmpro_include_payment_information_fields', '__return_false');
-			add_filter( 'pmpro_required_billing_fields', array( 'RazorPay_PMProGateway', 'pmpro_required_billing_fields' ) );
-			add_filter( 'pmpro_checkout_default_submit_button', array( 'RazorPay_PMProGateway', 'pmpro_checkout_default_submit_button' ) );
-			add_filter( 'pmpro_checkout_before_change_membership_level', array( 'RazorPay_PMProGateway', 'pmpro_checkout_before_change_membership_level' ), 10, 2);
+			add_filter('pmpro_gateways_with_pending_status', array('PMProGateway_Razorpay', 'pmpro_gateways_with_pending_status'));
+
+			add_filter('pmpro_checkout_default_submit_button', array('PMProGateway_Razorpay', 'pmpro_checkout_default_submit_button')); //
+
+            // custom confirmation page
+			//add_filter('pmpro_pages_shortcode_confirmation', array('PMProGateway_Razorpay', 'pmpro_pages_shortcode_confirmation'), 20, 1); //
+
+            // Refund functionality.
+			add_filter( 'pmpro_allowed_refunds_gateways', array( 'PMProGateway_Razorpay', 'pmpro_allowed_refunds_gateways' ) ); //
+			add_filter( 'pmpro_process_refund_razorpay', array( 'PMProGateway_Razorpay', 'process_refund' ), 10, 2 );
+			// Hook into checkout processing
+			//add_action('pmpro_checkout_before_processing', array('PMProGateway_Razorpay', 'checkout_process'), 10, 2);
+
+			//add_action('pmpro_checkout_after_billing_fields', array('PMProGateway_Razorpay', 'add_razorpay_hidden_field'));
+
 		}
 	}
 
-	static function pmpro_gateways_with_pending_status( $gateways ) {
-
-		$gateways[] = 'razorpay';
-		return $gateways;
-
-	}
-
-
 	/**
-	 * Make sure this gateway is in the gateways list
-	 *
-	 * @since 1.8
-	 */
-	static function pmpro_gateways( $gateways ) {
-
-		if ( empty( $gateways['razorpay'] ) ) {
-			$gateways['razorpay'] = __( 'RazorPay', 'razorpay-pmpro' );
+     * Make sure Razorpay is in the gateways list
+     */
+	static function pmpro_gateways($gateways)
+	{
+		if (empty($gateways['razorpay'])) {
+			$gateways = array_slice($gateways, 0, 1) + array("razorpay" => __('Razorpay', 'razorpay-gateway-paid-memberships-pro')) + array_slice($gateways, 1);
 		}
-
 		return $gateways;
 	}
 
 	/**
-	 * Get a list of payment options that the this gateway needs/supports.
-	 *
-	 * @since 1.8
-	 */
-	static function getGatewayOptions() {
-
-		$options = array(
-			'sslseal',
-			'nuclear_HTTPS',
-			'gateway_environment',
-			'razorpay_account_number',
-			'razorpay_subaccount_number',
-			'razorpay_datalink_username',
-			'razorpay_datalink_password',
-			'razorpay_flex_form_id',
-			'razorpay_salt',
+     * Get a list of payment options that the Razorpay gateway needs/supports.
+     */
+	static function getGatewayOptions()
+	{
+		$options = array (
+			'razorpay_key',
+			'razorpay_secret',
 			'currency',
-			'use_ssl',
 			'tax_state',
 			'tax_rate'
 		);
@@ -88,133 +85,154 @@ class RazorPay_PMProGateway extends PMProGateway {
 
 	/**
 	 * Set payment options for payment settings page.
-	 *
-	 * @since 1.8
 	 */
-	static function pmpro_payment_options( $options ) {
-		//get razorpay options
-		$razorpay_options = RazorPay_PMProGateway::getGatewayOptions();
+	static function pmpro_payment_options($options)
+	{
+                    //get Razorpay options
+		$razorpay_options = self::getGatewayOptions();
 
-		//merge with others.
-		$options = array_merge( $razorpay_options, $options );
+                    //merge with others.
+		$options = array_merge($razorpay_options, $options);
 
 		return $options;
 	}
-
 	/**
 	 * Check if all fields are complete
 	 */
 	static function pmpro_is_razorpay_ready( $ready ){
 
-		if ( get_option('pmpro_razorpay_account_number') == "" ||
-		get_option('pmpro_razorpay_subaccount_number') == "" ||
-		get_option('pmpro_razorpay_flex_form_id') == "" ||
-		get_option('pmpro_razorpay_salt') == "" ||
-		get_option('pmpro_razorpay_datalink_username') == "" ||
-		get_option('pmpro_razorpay_datalink_password') == "" ){
+		if ( get_option('razorpay_key') == "" ||
+			get_option('razorpay_secret') == "")
+		{
 			$ready = false;
-		} else {
-			$ready = true;
+		}else{
+			$ready = ture;
 		}
-
-		return $ready;
-
+	}
+	static function pmpro_payment_option_fields($values, $gateway)
+	{
+		?>
+		<tr class="pmpro_settings_divider gateway gateway_razorpay" <?php if ($gateway != "razorpay") { ?>style="display: none;"<?php } ?>>
+			<td colspan="2">
+				<hr />
+				<h2><?php _e('RazorPay Settings', 'pmpro-razorpay'); ?></h2>
+			</td>
+		</tr>
+		<tr class="gateway gateway_razorpay" <?php if ($gateway != "razorpay") { ?>style="display: none;"<?php } ?>>
+			<th scope="row" valign="top">
+				<label for="razorpay_key"><?php _e('RazorPay Key', 'pmpro-razorpay'); ?>:</label>
+			</th>
+			<td>
+				<input type="text" id="razorpay_key" name="razorpay_key" size="60" value="<?php echo esc_attr($values['razorpay_key']); ?>" />
+			</td>
+		</tr>
+		<tr class="gateway gateway_razorpay" <?php if ($gateway != "razorpay") { ?>style="display: none;"<?php } ?>>
+			<th scope="row" valign="top">
+				<label for="razorpay_secret"><?php _e('RazorPay Secret', 'pmpro-razorpay'); ?>:</label>
+			</th>
+			<td>
+				<input type="text" id="razorpay_secret" name="razorpay_secret" size="60" value="<?php echo esc_attr($values['razorpay_secret']); ?>" />
+			</td>
+		</tr>
+		<?php
 	}
 
 	/**
-	 * Display fields for this gateway's options.
-	 *
-	 * @since 1.8
-	 */
-	static function pmpro_payment_option_fields( $values, $gateway ) {
-	?>
-	<tr class="pmpro_settings_divider gateway gateway_razorpay" <?php if( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?> >
-		<td colspan="2">
-			<h2><?php esc_html_e('RazorPay Settings', 'razorpay-pmpro' ); ?></h2>
-		</td>
-	</tr>
+     * Webhook handler for Razorpay.
+     * @since 1.0 (Renamed in 1.7.1)
+     */
+	// static function pmpro_razorpay_ipn() {
+	// 	global $wpdb;
+
+    //                 // Let's make sure the request came from Razorpay by checking the secret key
+	// 	if ( ( strtoupper( $_SERVER['REQUEST_METHOD'] ) != 'POST' ) || ! array_key_exists( 'HTTP_X_PAYSTACK_SIGNATURE', $_SERVER ) ) {
+	// 		pmpro_razorpay_webhook_log( 'Razorpay signature not found' );
+	// 		pmpro_razorpay_webhook_exit();
+	// 	}
+
+    //                 // Log all the $_POST data to the IPN log.
+	// 	pmpro_razorpay_webhook_log( print_r( $_POST, true ) );
+
+    //                 // Get the relevant secret key based on gateway environment.
+	// 	$mode = pmpro_getOption("gateway_environment");
+	// 	if ($mode == 'sandbox') {
+	// 		$secret_key = pmpro_getOption("razorpay_tsk");
+	// 	} else {
+	// 		$secret_key = pmpro_getOption("razorpay_lsk");
+	// 	}
 
 
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?> >
-		<th scope="row" valign="top">
-			<label for="razorpay_account_number"><?php esc_html_e( 'Client Account Number', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<input type="text" id="razorpay_account_number" name="razorpay_account_number" size="60" value="<?php echo esc_attr( $values['razorpay_account_number'] ); ?>" />
-			<br /><small><?php esc_html_e( 'Enter the client account number from RazorPay', 'razorpay-pmpro' ); ?></small>
-		</td>
-	</tr>
+	// 	$input = @file_get_contents("php://input");
 
+    //                 // The Razorpay signature doesn't match the secret key, let's bail.
+	// 	if ( $_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac('sha512', $input, $secret_key ) ) {
+	// 		pmpro_razorpay_webhook_log( 'Razorpay signature does not match.' );
+	// 		pmpro_razorpay_webhook_exit();
+	// 	}
 
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?> >
-		<th scope="row" valign="top">
-			<label for="razorpay_subaccount_number"><?php esc_html_e( 'Client SubAccount Number', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<input type="text" id="razorpay_subaccount_number" name="razorpay_subaccount_number" size="60" value="<?php echo esc_attr( $values['razorpay_subaccount_number'] ); ?>" />
-			<br /><small><?php esc_html_e( 'SubAccount Number You will be using', 'razorpay-pmpro' );?></small>
-		</td>
-	</tr>
+	// 	$event = json_decode( $input );
+	// 	pmpro_razorpay_webhook_log( 'Event: ' . print_r( $event, true ) );
 
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?> >
-		<th scope="row" valign="top">
-			<label for="razorpay_datalink_username"><?php esc_html_e( 'Datalink Username', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<input type="text" id="razorpay_datalink_username" name="razorpay_datalink_username" size="60" value="<?php echo esc_attr( $values['razorpay_datalink_username'] ); ?>" />
-			<br /><small><?php esc_html_e( 'Datalink username. This is different than your login username. Contact RazorPay for more information.', 'razorpay-pmpro'); ?></small>
-		</td>
-	</tr>
+	// 	switch( $event->event ){
+	// 		case 'subscription.create':
 
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?>>
-		<th scope="row" valign="top">
-			<label for="razorpay_datalink_password"><?php esc_html_e( 'Datalink Password', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<input type="text" id="razorpay_datalink_password" name="razorpay_datalink_password" size="60" value="<?php echo esc_attr( $values['razorpay_datalink_password'] ); ?>" />
-			<br /><small><?php esc_html_e( 'Datalink pasword. This is different than your login password. Contact RazorPay for more information.', 'razorpay-pmpro' ); ?></small>
-		</td>
-	</tr>
+	// 		break;
+	// 		case 'subscription.disable':
+	// 		$amount = $event->data->subscription->amount/100;
+	// 		$morder = new MemberOrder();
+	// 		$subscription_code = $event->data->subscription_code;
+	// 		$email = $event->data->customer->email;
+	// 		$morder->Email = $email;
+	// 		$users_row = $wpdb->get_row( "SELECT ID, display_name FROM $wpdb->users WHERE user_email = '" . esc_sql( $email ). "' LIMIT 1" );
+	// 		if ( ! empty( $users_row )  ) {
+	// 			$user_id = $users_row->ID;
+	// 			$user = get_userdata($user_id);
+	// 			$user->membership_level = pmpro_getMembershipLevelForUser($user_id);
+	// 		}
 
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?>>
-		<th scope="row" valign="top">
-			<label for="razorpay_flex_form_id"><?php esc_html_e( 'Flex Form ID', 'razorpay-pmpro' );?>:</label>
-		</th>
-		<td>
-			<input type="text" name="razorpay_flex_form_id" size="60" value="<?php echo esc_attr( $values['razorpay_flex_form_id'] ); ?>" />
-			<br /><small><?php esc_html_e( 'Enter the Flex Form ID from RazorPay you will be using. Note you may need to have RazorPay enable Dynamic Pricing', 'razorpay-pmpro' ); ?></small>
-		</td>
-	</tr>
+	// 		if ( empty( $user ) ) {
+	// 			pmpro_razorpay_webhook_log( 'Could not get user' );
+	// 			pmpro_razorpay_webhook_exit();
+	// 		}
+	// 		self::cancelMembership($user);
+	// 		break;
+	// 		case 'charge.success':
+	// 		$morder =  new MemberOrder($event->data->reference);
+	// 		$morder->getMembershipLevel();
+	// 		$morder->getUser();
+	// 		$morder->Gateway->pmpro_pages_shortcode_confirmation('', $event->data->reference);
+	// 		$mode = pmpro_getOption("gateway_environment");
+	// 		if ($mode == 'sandbox') {
+	// 			$pk = pmpro_getOption("razorpay_tpk");
+	// 		} else {
+	// 			$pk = pmpro_getOption("razorpay_lpk");
+	// 		}
+	// 		$pstk_logger = new pmpro_razorpay_plugin_tracker('pm-pro',$pk);
+	// 		$pstk_logger->log_transaction_success($event->data->reference);
+	// 		pmpro_razorpay_webhook_log( 'Charge success. Reference: ' . $event->data->reference );
+	// 		break;
+	// 		case 'invoice.create':
+	// 		self::renewpayment($event);
+	// 		break;
+	// 		case 'invoice.update':
+	// 		self::renewpayment($event);
+	// 		break;
+	// 	}
+	// 	http_response_code(200);
+	// 	pmpro_razorpay_webhook_exit();
+	// }
 
-
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?>>
-		<th scope="row" valign="top">
-			<label for="razorpay_salt"><?php esc_html_e( 'Salt', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<input type="text" name="razorpay_salt" size="60" value="<?php echo esc_attr( $values['razorpay_salt'] ); ?>" />
-			<br /><small><?php esc_html_e( 'Salt value must be provided by RazorPay', 'razorpay-pmpro' ); ?></small>
-		</td>
-	</tr>
-	<tr class="gateway gateway_razorpay" <?php if ( $gateway != "razorpay" ) { ?>style="display: none;"<?php } ?>>
-		<th scope="row" valign="top">
-			<label><?php esc_html_e( 'RazorPay Webhook URL', 'razorpay-pmpro' ); ?>:</label>
-		</th>
-		<td>
-			<p><?php esc_html_e( 'To fully integrate with RazorPay, be sure to use the following for your Webhook URL', 'razorpay-pmpro' ); ?> <pre><?php echo esc_url( admin_url("admin-ajax.php") . "?action=razorpay-webhook"); ?></pre></p>
-
-		</td>
-	</tr>
-	<?php
-	}
-
-	/**
-	 * Remove required billing fields
-	 *
-	 * @since 1.8
-	 */
-	static function pmpro_required_billing_fields( $fields ) {
-
+	static function pmpro_required_billing_fields($fields)
+	{
+		// unset($fields['bfirstname']);
+		// unset($fields['blastname']);
+		// unset($fields['baddress1']);
+		// unset($fields['bcity']);
+		// unset($fields['bstate']);
+		// unset($fields['bzipcode']);
+		// unset($fields['bphone']);
+		// unset($fields['bemail']);
+		// unset($fields['bcountry']);
 		unset($fields['CardType']);
 		unset($fields['AccountNumber']);
 		unset($fields['ExpirationMonth']);
@@ -224,391 +242,435 @@ class RazorPay_PMProGateway extends PMProGateway {
 		return $fields;
 	}
 
+	private static function create_razorpay_plan($level_id)
+	{
+        // Get the membership level data
+		$level = pmpro_getLevel($level_id);
+
+        // Get the currency from PMPro settings
+		$currency = pmpro_getOption('currency');
+
+        // Prepare the period and interval based on the membership level
+        $period = strtolower($level->cycle_period); // monthly, yearly, etc.
+        $interval = $level->cycle_number; // The number of periods (1, 3, 6, etc.)
+
+        // RazorPay API credentials
+        $razorpay_key = pmpro_getOption('razorpay_key');
+        $razorpay_secret = pmpro_getOption('razorpay_secret');
+
+        // Initialize Razorpay API
+        $api = new Razorpay\Api\Api($razorpay_key, $razorpay_secret);
+
+        // Prepare the plan data to be sent to RazorPay
+        $plan_data = array(
+        	'period' => $period,
+        	'interval' => $interval,
+        	'item' => array(
+        		'name' => $level->name,
+                'amount' => $level->billing_amount * 100, // Amount in the smallest currency unit
+                'currency' => $currency,
+                'description' => $level->description
+            )
+        );
+
+        try {
+            // Create the plan using the RazorPay SDK
+        	$plan = $api->plan->create($plan_data);
+
+            // Check if the API request was successful
+        	if (!empty($plan->id)) {
+                // Save the RazorPay plan ID in the membership level meta
+        		update_pmpro_membership_level_meta($level_id, 'razorpay_plan_id', $plan->id);
+        		return $plan->id;
+        	}
+        } catch (Exception $e) {
+        	wp_die('RazorPay Plan creation failed: ' . $e->getMessage());
+        }
+
+        return null;
+    }
+
 	/**
-	 * Swap in our submit buttons.
-	 *
-	 * @since 1.8
-	 */
-	static function pmpro_checkout_default_submit_button( $show ) {
-
-		global $gateway, $pmpro_requirebilling;
-
-		//show our submit buttons
-		?>
-		<span id="pmpro_submit_span">
-			<input type="hidden" name="submit-checkout" value="1" />
-			<input type="submit" class="pmpro_btn pmpro_btn-submit-checkout" value="<?php if($pmpro_requirebilling) { esc_html_e( 'Check Out with RazorPay', 'razorpay-pmpro' ); } else { esc_html_e( 'Submit and Confirm', 'razorpay-pmpro' ); } ?> &raquo;" />
-		</span>
-		<?php
-
-		//don't show the default
-		return false;
-	}
-
-	/**
-	 * Instead of change membership levels, send users to RazorPay to pay.
-	 *
-	 *
-	 */
+     * Instead of change membership levels, send users to Razorpay payment page.
+     */
 	static function pmpro_checkout_before_change_membership_level( $user_id, $morder ) {
-
 		global $wpdb, $discount_code_id;
 
-		//if no order, no need to pay
-		if ( empty( $morder ) ) {
+        //if no order, no need to pay
+		if ( empty( $morder  )) {
 			return;
 		}
 
+		if ( empty( $morder->code ) ) {
+			$morder->code = $morder->getRandomCode();
+		}
+
+		$morder->payment_type = "razorpay";
+		$morder->status = "pending";
 		$morder->user_id = $user_id;
 		$morder->saveOrder();
 
-		//save discount code use
+        // Try to get the discount_code from a query param.
+		if ( empty( $discount_code_id ) ) {
+            // PMPro 3.0+
+			if ( isset( $_REQUEST['pmpro_discount_code'] ) ) {
+				$discount_code = sanitize_text_field( $_REQUEST['pmpro_discount_code'] );
+			}
+
+            // PMPro < 3.0
+			if ( isset( $_REQUEST['discount_code'] ) ) {
+				$discount_code = sanitize_text_field( $_REQUEST['discount_code'] );
+			}
+		}
+        // if global is empty but query is available. PMPro 3.0
+		if ( empty( $discount_code_id ) && ! empty( $discount_code ) ) {
+			$discount_code_id = $wpdb->get_var( "SELECT id FROM $wpdb->pmpro_discount_codes WHERE code = '" . esc_sql( $discount_code ) . "'" );
+		}
+
+        // save discount code use
 		if ( ! empty( $discount_code_id ) ) {
 			$wpdb->query(
 				$wpdb->prepare(
-					"INSERT INTO {$wpdb->pmpro_discount_codes_uses} 
-						( code_id, user_id, order_id, timestamp ) 
-						VALUES( %d, %d, %s, %s )",
-					$discount_code_id
-				),
-				$morder->user_id,
-				$morder->id,
-				current_time( 'mysql' )
+					"INSERT INTO $wpdb->pmpro_discount_codes_uses 
+					(code_id, user_id, order_id, timestamp) 
+					VALUES( %d , %d, %d, %s )",
+					$discount_code_id,
+					$user_id,
+					$morder->id,
+					current_time( 'mysql' )
+				)
 			);
 		}
 
-		do_action( "pmpro_before_send_to_razorpay", $user_id, $morder );
+		do_action("pmpro_before_send_to_razorpay", $user_id, $morder);
 
-		$morder->Gateway->sendToRazorPay( $morder );
-
+		$morder->Gateway->sendToRazorpay($morder);
 	}
 
-	function get_digest($initial_price, $initial_period, $currency_code = null, $recurring_price = null, $recurring_period = null, $number_of_rebills = null, $salt = null ) {
 
-		// Defaults.
-		if( empty( $currency_code ) ) {
-			$currency_code = RazorPay_PMProGateway::get_currency_code();
-		}
-		if( empty( $salt ) ) {
-			$salt = get_option('pmpro_razorpay_salt');
-		}
+	private function sendToRazorpay(&$order){
 		
-		$initial_price = number_format($initial_price , 2, ".","");
 		
-		$stringToHash = ''
-				 . $initial_price
-				 . $initial_period
-				 .(!empty($recurring_price) ? number_format($recurring_price, 2, '.', '') : '')
-				 . $recurring_period
-				 . $number_of_rebills
-				 . $currency_code /*978 - EUR
-								036 - AUD
-								124 - CAD
-								826 - GBP
-								392 - JPY
-								840 - USD*/
-				 . $salt;
+		$razorpay_key = pmpro_getOption('razorpay_key');
+		// Initialize Razorpay API
+		$api = self::initialize_razorpay_api();
+		
+		// Retrieve or create the Razorpay subscription
+		$razorpay_plan_id = self::get_or_create_razorpay_plan($order->membership_id, $api);
+		$razorpay_customer_id = self::get_or_create_razorpay_customer($order->user_id, $order->Email, $order->FirstName." ".$order->LastName, $api);
+		$razorpay_subscription_id = self::create_razorpay_subscription($razorpay_plan_id, $razorpay_customer_id, $api);
+		$order_id = $order->code; ?>
+		<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+		<script>
+			var options = {
+				"key": "<?php echo esc_js($razorpay_key); ?>",
+	            "subscription_id": "<?php echo esc_js($razorpay_subscription_id); ?>", // Pass the order ID
+	            "name": "Your Company Name",
+	            "description": "Subscription Plan",
+	            "image": "https://iconithemes.com/wp-content/uploads/2024/07/iconithemes-logo-2.png",
+	            "callback_url": "<?php echo esc_url(pmpro_url("confirmation")."?pmpro_level=".$order->membership_id)."&pmpro_order=".$order_id; ?>", // URL to handle successful payment
+	            "prefill": {
+	            	"name": "<?php echo esc_js($order->FirstName." ".$order->LastName); ?>",
+	            	"email": "<?php echo esc_js($order->Email); ?>",
+	            },
+	            "theme": {
+	            	"color": "#F37254"
+	            }
+	        };
+	        console.log(options);
+	        var rzp1 = new Razorpay(options);
+	        rzp1.open();
+	    </script>
+	    <?php
+    	// Prevent PMPro from continuing to change membership level
+	    exit;
+	}
 
-		return md5($stringToHash);
+
+
+
+
+	public static function prepare_subscription($user_id, $level_id)
+	{
+		global $pmpro_level, $current_user;
+    	// Initialize Razorpay API
+		$api = self::initialize_razorpay_api();
+
+    	// Retrieve or create the Razorpay subscription
+		$razorpay_plan_id = self::get_or_create_razorpay_plan($level_id, $api);
+		$razorpay_customer_id = self::get_or_create_razorpay_customer($user_id, $current_user->user_email, $current_user->display_name, $api);
+		$razorpay_subscription_id = self::create_razorpay_subscription($razorpay_plan_id, $razorpay_customer_id, $api);
+
+		return $razorpay_subscription_id;
+	}
+
+	public static function checkout_process($user_id, $morder)
+	{
+		global $pmpro_level, $current_user;
+
+        // Check if RazorPay is the active gateway
+		$active_gateway = pmpro_getOption('gateway');
+		if ($active_gateway !== 'razorpay') {
+            return; // Exit if RazorPay is not active
+        }
+
+        // Initialize Razorpay API
+        $api = self::initialize_razorpay_api();
+
+        // Step 1: Retrieve or Create Razorpay Plan
+        $level_id = $pmpro_level->id;
+        $razorpay_plan_id = self::get_or_create_razorpay_plan($level_id, $api);
+
+        if (empty($razorpay_plan_id)) {
+        	wp_die('Failed to retrieve or create Razorpay Plan.');
+        }
+
+        // Step 2: Retrieve or Create Razorpay Customer
+        $user_email = $current_user->user_email;
+        $user_name = $current_user->display_name;
+
+        $razorpay_customer_id = self::get_or_create_razorpay_customer($user_id, $user_email, $user_name, $api);
+
+        if (empty($razorpay_customer_id)) {
+        	wp_die('Failed to retrieve or create Razorpay Customer.');
+        }
+
+        // Step 3: Create Razorpay Subscription
+        $subscription_id = self::create_razorpay_subscription($razorpay_plan_id, $razorpay_customer_id, $api);
+
+        if (empty($subscription_id)) {
+        	wp_die('Failed to create Razorpay Subscription.');
+        }
+
+        // Step 4: Save Subscription Details in Order Meta
+        update_post_meta($morder->id, 'razorpay_subscription_id', $subscription_id);
+    }
+
+    private static function initialize_razorpay_api()
+    {
+    	$razorpay_key = pmpro_getOption('razorpay_key');
+    	$razorpay_secret = pmpro_getOption('razorpay_secret');
+
+    	return new Razorpay\Api\Api($razorpay_key, $razorpay_secret);
+    }
+
+    private static function get_or_create_razorpay_plan($level_id, $api)
+    {
+        // Check if plan ID exists
+    	$razorpay_plan_id = get_pmpro_membership_level_meta($level_id, 'razorpay_plan_id', true);
+
+    	if (!empty($razorpay_plan_id)) {
+    		return $razorpay_plan_id;
+    	}
+
+        // Plan doesn't exist, create a new one
+    	$level = pmpro_getLevel($level_id);
+    	$currency = pmpro_getOption('currency');
+
+        // Prepare plan data
+        $period = strtolower($level->cycle_period); // e.g., 'monthly', 'yearly'
+        $interval = $level->cycle_number; // e.g., 1, 3
+
+        // Map PMPro period to Razorpay period
+        $valid_periods = array('daily', 'weekly', 'monthly', 'yearly');
+        if (!in_array($period, $valid_periods)) {
+        	wp_die('Invalid billing period for Razorpay. Supported periods are daily, weekly, monthly, yearly.');
+        }
+
+        $plan_data = array(
+        	'period' => $period,
+        	'interval' => $interval,
+        	'item' => array(
+        		'name' => $level->name,
+                'amount' => $level->billing_amount * 100, // Convert to smallest currency unit
+                'currency' => $currency,
+                'description' => $level->description
+            )
+        );
+
+        try {
+        	$plan = $api->plan->create($plan_data);
+
+        	if (!empty($plan->id)) {
+                // Save plan ID for future use
+        		update_pmpro_membership_level_meta($level_id, 'razorpay_plan_id', $plan->id);
+        		return $plan->id;
+        	}
+        } catch (Exception $e) {
+        	wp_die('Razorpay Plan creation failed: ' . $e->getMessage());
+        }
+
+        return null;
+    }
+
+    private static function get_or_create_razorpay_customer($user_id, $email, $name, $api)
+    {
+        // Check if customer ID exists
+    	$razorpay_customer_id = get_user_meta($user_id, 'razorpay_customer_id', true);
+
+    	if (!empty($razorpay_customer_id)) {
+    		return $razorpay_customer_id;
+    	}
+
+        // Customer doesn't exist, create a new one
+    	$customer_data = array(
+    		'name' => $name,
+    		'email' => $email,
+            // Add more fields as necessary, e.g., contact, notes
+    	);
+
+    	try {
+    		$customer = $api->customer->create($customer_data);
+
+    		if (!empty($customer->id)) {
+                // Save customer ID for future use
+    			update_user_meta($user_id, 'razorpay_customer_id', $customer->id);
+    			return $customer->id;
+    		}
+    	} catch (Exception $e) {
+    		wp_die('Razorpay Customer creation failed: ' . $e->getMessage());
+    	}
+
+    	return null;
+    }
+
+    private static function create_razorpay_subscription($plan_id, $customer_id, $api)
+    {
+        // Prepare subscription data
+    	$subscription_data = array(
+    		'plan_id' => $plan_id,
+    		'customer_notify' => 1,
+            'total_count' => 999, // Set as per your requirement
+            'customer_id' => $customer_id,
+            // 'start_at' => future_timestamp, // Optional: Set if you want to start the subscription at a future date
+            // 'addons' => array(), // Optional: Addons if any
+            // 'notes' => array(), // Optional: Any notes
+        );
+
+    	try {
+    		$subscription = $api->subscription->create($subscription_data);
+
+    		if (!empty($subscription->id)) {
+    			return $subscription->id;
+    		}
+    	} catch (Exception $e) {
+    		wp_die('Razorpay Subscription creation failed: ' . $e->getMessage());
+    	}
+
+    	return null;
+    }
+
+    static function pmpro_checkout_default_submit_button($show)
+    {
+    	global $gateway, $pmpro_requirebilling, $current_user, $pmpro_level;
+
+		//show our submit buttons
+    	?>
+    	<span id="pmpro_submit_span">
+    		<input type="hidden" name="submit-checkout" value="1" />
+    		<input type="submit" id="rzp-button1" class="<?php echo esc_attr( pmpro_get_element_class( 'pmpro_btn pmpro_btn-submit-checkout', 'pmpro_btn-submit-checkout' ) ); ?>" value="<?php if ( $pmpro_requirebilling ) { esc_html_e( 'Check Out with Razorpay', 'razorpay-gateway-paid-memberships-pro' ); } else { esc_html_e( 'Submit and Confirm', 'razorpay-gateway-paid-memberships-pro' ); }?>" />
+    	</span>
+    	<?php
+
+        //don't show the default
+    	return false;
+    }
+
+	/** 
+     * Enable refund functionality for razorpay.
+     * @since TBD.
+     */
+	static function pmpro_allowed_refunds_gateways( $gateways ) {
+		$gateways[] = 'razorpay';
+		return $gateways;
 	}
 
 	/**
-	 * Process checkout.
-	 *
-	 */
-	function process( &$order ) {
+     * Allow refunds from within Paid Memberships Pro and Razorpay.
+     * @since TBD
+     */
+	public static function process_refund( $success, $order ) {
+		global $current_user;
 
-		if ( empty( $order->code ) ) {
-			$order->code = $order->getRandomCode();
+        //default to using the payment id from the order
+		if ( !empty( $order->payment_transaction_id ) ) {
+			$transaction_id = $order->payment_transaction_id;
 		}
 
-		//clean up a couple values
-		$order->payment_type = "RazorPay";
-		$order->CardType = "";
-		$order->cardtype = "";
-
-		//just save, the user will go to RazorPay to pay
-		$order->status = "pending";
-		$order->saveOrder();
-		return true;
-	}
-
-	static function get_currency_code( $currency_abbr = null ) {
-
-		global $pmpro_currency;
-
-		$currency_code = false;
-
-		if ( empty( $currency_abbr ) ) {
-			$currency_abbr = $pmpro_currency;
-		}
-
-		switch( $currency_abbr ) {
-
-			case 'EUR':
-				$currency_code = '978';
-				break;
-
-			case 'AUD':
-				$currency_code = '036';
-				break;
-
-			case 'CAD':
-				$currency_code = '124';
-				break;
-
-			case 'GBP':
-				$currency_code = '826';
-				break;
-
-			case 'JPY':
-				$currency_code = '392';
-				break;
-
-			case 'USD':
-				$currency_code = '840';
-				break;
-		}
-
-		return $currency_code;
-	}
-
-	function sendToRazorPay( &$order ) {
-
-		$first_name	= pmpro_getParam('bfirstname', 'REQUEST');
-		$last_name	= pmpro_getParam('blastname', 'REQUEST');
-		$baddress1	= pmpro_getParam('baddress1', 'REQUEST');
-		$baddress2	= pmpro_getParam('baddress2',  'REQUEST');
-		$bcity		= pmpro_getParam('bcity', 'REQUEST');
-		$bstate		= pmpro_getParam('bstate', 'REQUEST');
-		$bzipcode		= pmpro_getParam('bzipcode', 'REQUEST');
-		$bcountry		= pmpro_getParam('bcountry', 'REQUEST');
-		$bphone		= pmpro_getParam('bphone', 'REQUEST');
-		$bemail		= pmpro_getParam('bemail', 'REQUEST');
-
-		global $pmpro_currency;
-
-		$currency_code = RazorPay_PMProGateway::get_currency_code();
-
-		//get the options
-
-		$razorpay_account_number = get_option('pmpro_razorpay_account_number');
-		$razorpay_subaccount_number = get_option('pmpro_razorpay_subaccount_number');
-		$razorpay_flex_form_id = get_option('pmpro_razorpay_flex_form_id');
-		$razorpay_salt = get_option('pmpro_razorpay_salt');
-
-		$razorpay_flex_forms_url = 'https://api.razorpay.com/wap-frontflex/flexforms/' . $razorpay_flex_form_id;
-
-		$razorpay_args = array();
-		$razorpay_args['clientAccnum'] = $razorpay_account_number;
-		$razorpay_args['clientSubacc'] = $razorpay_subaccount_number;
-		$razorpay_args['currencyCode'] = $currency_code;
-
-		//taxes on initial amount
-		$initial_payment = $order->InitialPayment;
-		$initial_payment_tax = $order->getTaxForPrice($initial_payment);
-		$initial_payment = pmpro_round_price( (float)$initial_payment + (float)$initial_payment_tax );
-
-		// Recurring membership
-		if ( pmpro_isLevelRecurring( $order->membership_level ) ) {
-
-			$recurring_price = number_format($order->membership_level->billing_amount, 2, ".", "");
-
-			$recurring_period = '';
-
-			//TODO: Add a warning to the admin page that billing periods for RazorPay
-			//are best set in days, so there is no confusion over off by 1 etc.
-
-			//figure out days based on period
-			if ( $order->BillingPeriod == "Day" ){
-				$recurring_period = 1*$order->membership_level->cycle_number;
-			} else if ( $order->BillingPeriod == "Week" ) {
-				$recurring_period = 7*$order->membership_level->cycle_number;
-			} else if ( $order->BillingPeriod == "Month" ) {
-				$recurring_period = 30*$order->membership_level->cycle_number;
-			} else if ( $order->BillingPeriod == "Year" ) {
-				$recurring_period = 365*$order->membership_level->cycle_number;
-			}
-
-			$number_of_rebills = '';
-
-			if ( ! empty( $order->membership_level->billing_limit ) ) {
-				$number_of_rebills = $order->membership_level->billing_limit;
-			} else {
-				$number_of_rebills = 99; //means unlimited
-			}
-
-			$razorpay_args['recurringPrice'] = $recurring_price;
-			$razorpay_args['recurringPeriod'] = $recurring_period;
-			$razorpay_args['numRebills'] = $number_of_rebills;
-			$razorpay_args['initialPrice'] = number_format($initial_payment, 2, ".", "");
-
-			//technically, the initial period can be different than the recurring period, but keep it consistant with the other integrations.
-			$razorpay_args['initialPeriod'] = $this->get_initialPeriod( $order );
-			$razorpay_args['formDigest'] = $this->get_digest($initial_payment, $razorpay_args['initialPeriod'], $currency_code, $recurring_price, $recurring_period, $number_of_rebills );
-			$razorpay_args['pmpro_orderid'] = $order->id;
-			$razorpay_args['email'] = $bemail;
-		
-		} else {	
-
-			// Non-recurring membership
-			$razorpay_args['initialPrice'] = number_format( $initial_payment, 2, ".", "" );
-			$razorpay_args['initialPeriod'] = $this->get_initialPeriod( $order );
-			$razorpay_args['formDigest'] = $this->get_digest( $initial_payment, $razorpay_args['initialPeriod'], $currency_code );
-			$razorpay_args['pmpro_orderid'] = $order->id;
-			$razorpay_args['email'] = $bemail;
-		}
-
-		//If we have these set, pass them to RazorPay
-		$razorpay_args['customer_fname'] = $first_name;
-		$razorpay_args['customer_lname'] = $last_name;
-		$razorpay_args['address1'] = $baddress1. " ".$baddress2; //only one line in RazorPay for Address
-		$razorpay_args['city'] = $bcity;
-		$razorpay_args['state'] =$bstate;
-		$razorpay_args['zipcode'] =$bzipcode;
-		$razorpay_args['country'] = $bcountry;
-		$razorpay_args['phone_number'] = $bphone;
-
-		$razorpay_url	= add_query_arg( $razorpay_args, $razorpay_flex_forms_url );
-
-		//redirect to RazorPay
-		wp_redirect( $razorpay_url );
-
-		exit;
-	}
-
-	function cancel( &$order ) {
-
-		//no matter what happens below, we're going to cancel the order in our system
-
-		$order->updateStatus( "cancelled" );
-		//require a payment transaction id
-		if ( empty( $order->subscription_transaction_id ) ) {
+        //need a transaction id
+		if ( empty( $transaction_id ) ) {
 			return false;
 		}
 
-		//build the URL
-		$sms_link = "https://datalink.razorpay.com/utils/subscriptionManagement.cgi?";
-
-		$qargs = array();
-		$qargs["action"]		= "cancelSubscription";
-		$qargs["clientSubacc"]	= '';
-		$qargs["usingSubacc"]	= get_option('pmpro_razorpay_subaccount_number');
-		$qargs["subscriptionId"] = $order->subscription_transaction_id;
-		$qargs["clientAccnum"]	= get_option('pmpro_razorpay_account_number');
-		$qargs["username"]		= get_option('pmpro_razorpay_datalink_username'); //must be provided by RazorPay
-		$qargs["password"]		= get_option('pmpro_razorpay_datalink_password'); //must be provided by RazorPay
-
-		$cancel_link	= add_query_arg( $qargs, $sms_link );
-		$response		= wp_remote_get( $cancel_link );
-
-		$response_code		= wp_remote_retrieve_response_code( $response );
-		$response_message	= wp_remote_retrieve_response_message( $response );
-
-		if ( 200 != $response_code && !empty( $response_message ) ) {
-			//return new WP_Error( $response_code, $response_message );
-			$cancel_error = sprintf( __( 'Cancellation of subscription id: %s may have failed. Check RazorPay Admin to confirm cancellation', 'razorpay-pmpro'), $order->subscription_transaction_id );
-
-			$email = get_option("admin_email");
-
-			wp_mail( $email, get_option("blogname") . __( ' RazorPay Subscription Cancel Error', 'razorpay-pmpro' ), $cancel_error );
-
-		} else if ( 200 != $response_code ) {
-
-			//Unknown Error Occurred
-			$cancel_error = sprintf( __( 'Cancellation of subscription id: %s may have failed. Check RazorPay Admin to confirm cancellation', 'razorpay-pmpro'), $order->subscription_transaction_id );
-
-			$email = get_option("admin_email");
-			wp_mail($email, get_option("blogname") . __( ' RazorPay Subscription Cancel Error', 'razorpay-pmpro' ), $cancel_error);
+        // OKAY do the refund now.
+        // Make the API call to PayStack to refund the order.
+		$mode = pmpro_getOption("gateway_environment");
+		if ( $mode == "sandbox" ) {
+			$key = pmpro_getOption("razorpay_tsk");
 
 		} else {
-			$response_body = wp_remote_retrieve_body( $response );
-			$cancel_status = filter_var($response_body, FILTER_SANITIZE_NUMBER_INT);
-			if ( $cancel_status < 1 ) {
-				$error_code = $this->pmprocb_return_api_response( $cancel_status );
-
-				//A RazorPay Error has occured. They need to contact RazorPay
-				$cancel_error = sprintf( __( 'Cancellation of subscription id: %s may have failed. Check RazorPay Admin to confirm cancellation. Error: %s', 'razorpay-pmpro'), $order->subscription_transaction_id, $error_code );
-
-				$email = get_option("admin_email");
-				wp_mail($email, get_option("blogname") . __( ' RazorPay Subscription Cancel Error', 'razorpay-pmpro' ), $cancel_error);
-			} else {
-				// Success
-			}
+			$key = pmpro_getOption("razorpay_lsk");
 		}
-    
-		return $order;
-	}
 
-	function pmprocb_return_api_response( $code ) {
+		$razorpay_url = 'https://api.razorpay.co/refund/';
 
-		/**
-		 * Error codes and explanations obtained from RazorPay documentation
-		 */
-		$error_codes = array(
-			"0" => __( "The requested action failed.", "razorpay-pmpro" ),
-			"-1" => __( "The arguments provided to authenticate the merchant were invalid or missing.", "razorpay-pmpro" ),
-			"-2" => __( "The subscription id provided was invalid or the subscription type is not supported by the requested action.", "razorpay-pmpro" ),
-			"-3" => __( "No record was found for the given subscription.", "razorpay-pmpro" ),
-			"-4" => __( "The given subscription was not for the account the merchant was authenticated on.", "razorpay-pmpro" ),
-			"-5" => __( "The arguments provided for the requested action were invalid or missing.", "razorpay-pmpro" ),
-			"-6" => __( "The requested action was invalid", "razorpay-pmpro" ),
-			"-7" => __( "There was an internal error or a database error and the requested action could not complete.", "razorpay-pmpro" ),
-			"-8" => __( "The IP Address the merchant was attempting to authenticate on was not in the valid range.", "razorpay-pmpro" ),
-			"-9" => __( "The merchant’s account has been deactivated for use on the Datalink system or the merchant is not permitted to perform the requested action", "razorpay-pmpro" ),
-			"-10" => __( "The merchant has not been set up to use the Datalink system.", "razorpay-pmpro" ),
-			"-11" => __( "Subscription is not eligible for a discount, recurring price less than $5.00.", "razorpay-pmpro" ),
-			"-12" => __( "The merchant has unsuccessfully logged into the system 3 or more times in the last hour. The merchant should wait an hour before attempting to login again and is advised to review the login information.", "razorpay-pmpro" ),
-			"-15" => __( "Merchant over refund threshold", "razorpay-pmpro" ),
-			"-16" => __( "Merchant over void threshold", "razorpay-pmpro" ),
-			"-23" => __( "Transaction limit reached", "razorpay-pmpro" ),
-			"-24" => __( "Purchase limit reached", "razorpay-pmpro" )
+		$headers = array(
+			'Authorization' => 'Bearer ' . $key,
+			'Cache-Control' => 'no-cache'
 		);
 
-		if ( isset( $error_codes[$code] ) ){
-			return $error_codes[$code];
+      	// The transaction ID for the refund.
+		$fields = array(
+			'transaction' => $transaction_id
+		);
+
+		$args = array(
+			'headers' => $headers,
+			'timeout' => 60,
+			'body' => $fields
+		);
+
+
+		$success = false;
+
+        // Try to make the API call now.
+		$request = wp_remote_post( $razorpay_url, $args );
+
+		if ( ! is_wp_error( $request ) ) {
+
+			$response = json_decode( wp_remote_retrieve_body( $request ) );
+
+            // If not successful throw an error.
+			if ( ! $response->status ) {
+				$order->notes = trim( $order->notes.' '.sprintf( __('Admin: Order refund failed on %1$s for transaction ID %2$s by %3$s. Order may have already been refunded.', 'paid-memberships-pro' ), date_i18n('Y-m-d H:i:s'), $transaction_id, $current_user->display_name ) );
+				$order->saveOrder();
+			} else {
+                // Set the order status to refunded and save it and return true
+				$order->status = 'refunded';
+
+				$success = true;
+
+				$order->notes = trim( $order->notes.' '.sprintf( __('Admin: Order successfully refunded on %1$s for transaction ID %2$s by %3$s.', 'paid-memberships-pro' ), date_i18n('Y-m-d H:i:s'), $transaction_id, $current_user->display_name ) );	
+
+				$user = get_user_by( 'id', $order->user_id );
+
+                //send an email to the member
+				$myemail = new PMProEmail();
+				$myemail->sendRefundedEmail( $user, $order );
+
+                //send an email to the admin
+				$myemail = new PMProEmail();
+				$myemail->sendRefundedAdminEmail( $user, $order );
+
+				$order->saveOrder();
+			}                            
 		}
+		return $success;
 
-		return __( "Error Code Unknown", "razorpay-pmpro" );
 	}
-
-	/**
-	 * Calculate the initialPeriod.
-	 * @param object $order The order object.
-	 * @return int The initial period.
-	 */
-	private function get_initialPeriod( $order ) {
-		$level = $order->getMembershipLevel();
-		if ( pmpro_isLevelRecurring( $level ) ) {
-			// For recurring payments, period is billing period.
-			$profile_start_date = pmpro_calculate_profile_start_date( $order, 'U', true );
-			$period = ceil( abs( $profile_start_date - time() ) / 86400 );
-
-			// Period cannot be > 365 days. Usually this is a leap year, but could be due to filters on the startdate.
-			$period = min( $period, 365 );
-			
-			// NOTE: We're not supporting custom trials right now. Probably can't.
-		} elseif ( $level->expiration_number > 0 ) {
-			// Get the levels expiration and convert it to days.
-			$expiration_date = $this->calculate_expiration_date( $level );
-			$order_date = date( "Y-m-d", $order->timestamp );
-			$period = round( ( strtotime( $expiration_date ) - strtotime( $order_date ) ) / DAY_IN_SECONDS ); 
-		} else {
-			$period = 2; //RazorPay doesn't allow period values of 1.
-		}
-
-		return $period;
-	}
-
-	/**
-	 * Convert expiration period to date to YYYY-MM-DD from level expiration settings.
-	 *
-	 * @param MemberOrder $order
-	 * @return string $calculated_date The calculated date of expiration date from todays date. (i.e. 2024-01-31)
-	 */
-	public function calculate_expiration_date( $level ) {
-		//Convert $level->expiration_period + $level->expiration_number to a date.
-		$expiration_date = date( "Y-m-d", strtotime( "+ " . $level->expiration_number . " " . $level->expiration_period, current_time( "timestamp" ) ) );
-		return $expiration_date;
+	static function add_razorpay_hidden_field() {
+		?>
+		<input type="hidden" name="razorpay_payment_id" id="razorpay_payment_id" value="" />
+		<?php
 	}
 }
